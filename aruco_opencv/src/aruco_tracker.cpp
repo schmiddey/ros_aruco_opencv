@@ -27,7 +27,7 @@
 #include "yaml-cpp/yaml.h"
 
 #include "rclcpp/rclcpp.hpp"
-#include "rclcpp_lifecycle/lifecycle_node.hpp"
+// #include "rclcpp_lifecycle/lifecycle_node.hpp"
 
 #include "cv_bridge/cv_bridge.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
@@ -38,6 +38,9 @@
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
 #include "image_transport/camera_common.hpp"
+#include "image_transport/image_transport.hpp"
+#include "image_transport/subscriber.hpp"
+#include "image_transport/publisher.hpp"
 
 #include "aruco_opencv_msgs/msg/aruco_detection.hpp"
 #include "aruco_opencv_msgs/msg/board_pose.hpp"
@@ -45,12 +48,12 @@
 #include "aruco_opencv/utils.hpp"
 #include "aruco_opencv/parameters.hpp"
 
-using rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface;
+// using rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface;
 
 namespace aruco_opencv
 {
 
-class ArucoTracker : public rclcpp_lifecycle::LifecycleNode
+class ArucoTracker : public rclcpp::Node
 {
   // Parameters
   std::string cam_base_topic_;
@@ -68,11 +71,14 @@ class ArucoTracker : public rclcpp_lifecycle::LifecycleNode
 
   // ROS
   OnSetParametersCallbackHandle::SharedPtr on_set_parameter_callback_handle_;
-  rclcpp_lifecycle::LifecyclePublisher<aruco_opencv_msgs::msg::ArucoDetection>::SharedPtr
-    detection_pub_;
-  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
+  rclcpp::Publisher<aruco_opencv_msgs::msg::ArucoDetection>::SharedPtr detection_pub_;
+  // rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_pub_;
+  image_transport::Publisher debug_pub_it_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr cam_info_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
+  //sub for image transport sub
+  image_transport::Subscriber img_sub_it_;
+
   rclcpp::Time last_msg_stamp_;
   bool cam_info_retrieved_ = false;
 
@@ -94,7 +100,7 @@ class ArucoTracker : public rclcpp_lifecycle::LifecycleNode
 
 public:
   explicit ArucoTracker(rclcpp::NodeOptions options)
-  : LifecycleNode("aruco_tracker", options),
+  : Node("aruco_tracker", options),
     camera_matrix_(3, 3, CV_64FC1),
     distortion_coeffs_(4, 1, CV_64FC1, cv::Scalar(0)),
     marker_obj_points_(4, 1, CV_32FC3)
@@ -102,7 +108,7 @@ public:
     declare_parameters();
   }
 
-  LifecycleNodeInterface::CallbackReturn on_configure(const rclcpp_lifecycle::State &)
+  bool on_configure()
   {
     RCLCPP_INFO(get_logger(), "Configuring");
 
@@ -112,7 +118,7 @@ public:
 
     if (ARUCO_DICT_MAP.find(marker_dict_) == ARUCO_DICT_MAP.end()) {
       RCLCPP_ERROR_STREAM(get_logger(), "Unsupported dictionary name: " << marker_dict_);
-      return LifecycleNodeInterface::CallbackReturn::FAILURE;
+      return false;
     }
 
     dictionary_ = cv::aruco::getPredefinedDictionary(ARUCO_DICT_MAP.at(marker_dict_));
@@ -129,12 +135,13 @@ public:
 
     detection_pub_ = create_publisher<aruco_opencv_msgs::msg::ArucoDetection>(
       "aruco_detections", 5);
-    debug_pub_ = create_publisher<sensor_msgs::msg::Image>("~/debug", 5);
+    // debug_pub_ = create_publisher<sensor_msgs::msg::Image>("~/debug", 5);
+    debug_pub_it_ = image_transport::create_publisher(this, "~/debug");
 
-    return LifecycleNodeInterface::CallbackReturn::SUCCESS;
+    return true;
   }
 
-  LifecycleNodeInterface::CallbackReturn on_activate(const rclcpp_lifecycle::State & state)
+  bool on_activate()
   {
     RCLCPP_INFO(get_logger(), "Activating");
 
@@ -143,10 +150,10 @@ public:
       tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
     }
 
-    LifecycleNode::on_activate(state);
+    // LifecycleNode::on_activate(state);
 
-    detection_pub_->on_activate();
-    debug_pub_->on_activate();
+    // detection_pub_->on_activate();
+    // debug_pub_->on_activate();
 
     on_set_parameter_callback_handle_ =
       add_on_set_parameters_callback(
@@ -163,66 +170,73 @@ public:
       cam_info_topic, 1,
       std::bind(&ArucoTracker::callback_camera_info, this, std::placeholders::_1));
 
-    rmw_qos_profile_t image_sub_qos = rmw_qos_profile_default;
-    image_sub_qos.reliability =
-      static_cast<rmw_qos_reliability_policy_t>(image_sub_qos_reliability_);
-    image_sub_qos.durability = static_cast<rmw_qos_durability_policy_t>(image_sub_qos_durability_);
-    image_sub_qos.depth = image_sub_qos_depth_;
+    // rmw_qos_profile_t image_sub_qos = rmw_qos_profile_default;
+    // image_sub_qos.reliability =
+    //   static_cast<rmw_qos_reliability_policy_t>(image_sub_qos_reliability_);
+    // image_sub_qos.durability = static_cast<rmw_qos_durability_policy_t>(image_sub_qos_durability_);
+    // image_sub_qos.depth = image_sub_qos_depth_;
 
-    auto qos = rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(image_sub_qos), image_sub_qos);
+    // auto qos = rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(image_sub_qos), image_sub_qos);
 
-    img_sub_ = create_subscription<sensor_msgs::msg::Image>(
-      cam_base_topic_, qos, std::bind(
-        &ArucoTracker::callback_image, this, std::placeholders::_1));
+    // img_sub_ = create_subscription<sensor_msgs::msg::Image>(
+    //   cam_base_topic_, qos, std::bind(
+    //     &ArucoTracker::callback_image, this, std::placeholders::_1));
+    
+    img_sub_it_ = image_transport::create_subscription(
+      this,
+      cam_base_topic_,
+      std::bind(&ArucoTracker::callback_image, this, std::placeholders::_1),
+      "compressed");
 
-    return LifecycleNodeInterface::CallbackReturn::SUCCESS;
+    return true;
   }
 
-  LifecycleNodeInterface::CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state)
-  {
-    RCLCPP_INFO(get_logger(), "Deactivating");
+  // bool on_deactivate()
+  // {
+  //   RCLCPP_INFO(get_logger(), "Deactivating");
 
-    on_set_parameter_callback_handle_.reset();
-    cam_info_sub_.reset();
-    img_sub_.reset();
-    tf_listener_.reset();
-    tf_buffer_.reset();
+  //   on_set_parameter_callback_handle_.reset();
+  //   cam_info_sub_.reset();
+  //   img_sub_.reset();
+  //   tf_listener_.reset();
+  //   tf_buffer_.reset();
 
-    detection_pub_->on_deactivate();
-    debug_pub_->on_deactivate();
+  //   // detection_pub_->on_deactivate();
+  //   // debug_pub_->on_deactivate();
 
-    return LifecycleNodeInterface::CallbackReturn::SUCCESS;
-  }
+  //   // return LifecycleNodeInterface::CallbackReturn::SUCCESS;
+  //   return true;
+  // }
 
-  LifecycleNodeInterface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State &)
-  {
-    RCLCPP_INFO(get_logger(), "Cleaning up");
+  // LifecycleNodeInterface::CallbackReturn on_cleanup(const rclcpp_lifecycle::State &)
+  // {
+  //   RCLCPP_INFO(get_logger(), "Cleaning up");
 
-    tf_broadcaster_.reset();
-    dictionary_.reset();
-    detector_parameters_.reset();
-    detection_pub_.reset();
-    debug_pub_.reset();
+  //   tf_broadcaster_.reset();
+  //   dictionary_.reset();
+  //   detector_parameters_.reset();
+  //   detection_pub_.reset();
+  //   debug_pub_.reset();
 
-    return LifecycleNodeInterface::CallbackReturn::SUCCESS;
-  }
+  //   return LifecycleNodeInterface::CallbackReturn::SUCCESS;
+  // }
 
-  LifecycleNodeInterface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State & state)
-  {
-    RCLCPP_INFO(get_logger(), "Shutting down");
+  // LifecycleNodeInterface::CallbackReturn on_shutdown(const rclcpp_lifecycle::State & state)
+  // {
+  //   RCLCPP_INFO(get_logger(), "Shutting down");
 
-    on_set_parameter_callback_handle_.reset();
-    cam_info_sub_.reset();
-    img_sub_.reset();
-    tf_listener_.reset();
-    tf_buffer_.reset();
-    tf_broadcaster_.reset();
-    detector_parameters_.reset();
-    detection_pub_.reset();
-    debug_pub_.reset();
+  //   on_set_parameter_callback_handle_.reset();
+  //   cam_info_sub_.reset();
+  //   img_sub_.reset();
+  //   tf_listener_.reset();
+  //   tf_buffer_.reset();
+  //   tf_broadcaster_.reset();
+  //   detector_parameters_.reset();
+  //   detection_pub_.reset();
+  //   debug_pub_.reset();
 
-    return LifecycleNodeInterface::CallbackReturn::SUCCESS;
-  }
+  //   return LifecycleNodeInterface::CallbackReturn::SUCCESS;
+  // }
 
 protected:
   void declare_parameters()
@@ -408,6 +422,7 @@ protected:
     }
   }
 
+
   void callback_image(const sensor_msgs::msg::Image::ConstSharedPtr img_msg)
   {
     RCLCPP_DEBUG_STREAM(get_logger(), "Image message address [SUBSCRIBE]:\t" << img_msg.get());
@@ -450,7 +465,7 @@ protected:
 
       cv::parallel_for_(
         cv::Range(0, n_markers), [&](const cv::Range & range) {
-          for (size_t i = range.start; i < range.end; i++) {
+          for (int i = range.start; i < range.end; i++) {
             int id = marker_ids[i];
 
             cv::solvePnP(
@@ -530,12 +545,12 @@ protected:
 
     detection_pub_->publish(detection);
 
-    if (debug_pub_->get_subscription_count() > 0) {
+    if (debug_pub_it_.getNumSubscribers() > 0) {
       auto debug_cv_ptr = cv_bridge::toCvCopy(img_msg, "bgr8");
       cv::aruco::drawDetectedMarkers(debug_cv_ptr->image, marker_corners, marker_ids);
       {
         std::lock_guard<std::mutex> guard(cam_info_mutex_);
-        for (size_t i = 0; i < n_markers; i++) {
+        for (int i = 0; i < n_markers; i++) {
           cv::drawFrameAxes(
             debug_cv_ptr->image, camera_matrix_, distortion_coeffs_, rvec_final[i],
             tvec_final[i], 0.2, 3);
@@ -544,7 +559,8 @@ protected:
       std::unique_ptr<sensor_msgs::msg::Image> debug_img =
         std::make_unique<sensor_msgs::msg::Image>();
       debug_cv_ptr->toImageMsg(*debug_img);
-      debug_pub_->publish(std::move(debug_img));
+      // debug_pub_->publish(std::move(debug_img));
+      debug_pub_it_.publish(std::move(debug_img));
     }
 
     auto callback_end_time = get_clock()->now();
@@ -558,21 +574,41 @@ protected:
   }
 };
 
-class ArucoTrackerAutostart : public ArucoTracker
-{
-public:
-  explicit ArucoTrackerAutostart(rclcpp::NodeOptions options)
-  : ArucoTracker(options)
-  {
-    auto new_state = configure();
-    if (new_state.label() == "inactive") {
-      activate();
-    }
-  }
-};
+// class ArucoTrackerAutostart : public ArucoTracker
+// {
+// public:
+//   explicit ArucoTrackerAutostart(rclcpp::NodeOptions options)
+//   : ArucoTracker(options)
+//   {
+//     auto new_state = configure();
+//     if (new_state.label() == "inactive") {
+//       activate();
+//     }
+//   }
+// };
 
 }  // namespace aruco_opencv
 
-#include "rclcpp_components/register_node_macro.hpp"
-RCLCPP_COMPONENTS_REGISTER_NODE(aruco_opencv::ArucoTracker)
-RCLCPP_COMPONENTS_REGISTER_NODE(aruco_opencv::ArucoTrackerAutostart)
+// #include "rclcpp_components/register_node_macro.hpp"
+// RCLCPP_COMPONENTS_REGISTER_NODE(aruco_opencv::ArucoTracker)
+// RCLCPP_COMPONENTS_REGISTER_NODE(aruco_opencv::ArucoTrackerAutostart)
+
+int main(int argc, char** argv)
+{
+  rclcpp::init(argc, argv);
+  auto node = std::make_shared<aruco_opencv::ArucoTracker>(rclcpp::NodeOptions());
+  if(!node->on_configure())
+  {
+    RCLCPP_ERROR(node->get_logger(), "Failed to configure node");
+    return 1;
+  }
+  if(!node->on_activate())
+  {
+    RCLCPP_ERROR(node->get_logger(), "Failed to activate node");
+    return 1;
+  }
+  RCLCPP_INFO(node->get_logger(), "Spinning node");
+  rclcpp::spin(node);
+  rclcpp::shutdown();
+  return 0;
+}
